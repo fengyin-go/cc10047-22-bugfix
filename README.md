@@ -69,6 +69,41 @@ npm run dev
 | 表目录同步 | `table_catalog` | 同步记录 | 记录标识、来源Catalog、目标Catalog |
 | 湖仓审计 | `lake_audit` | 审计报告 | 报告标识、审计范围、审计时间 |
 
+## 治理发布确认
+
+元数据治理链路（`lake_lineage → lake_audit → table_catalog`）的发布结果统一落在
+`backend/app/services/governance_publish.py` 的发布确认仓库里，页面入口是 `/governance`。
+
+- **目录异常阻断发布**：目标目录不存在、同步表清单为空、目录未完成同步确认，批次状态为
+  `已阻断`，`synced_tables` 保持 0，不会出现“已成功但同步表数为空”。
+- **审计证据保留**：已确认的审计证据（表清单、异常表、待查项、确认时间）会写入发布确认；
+  失败重试只追加异常和待重试表，不会改写或清空审计结论。
+- **证据优先级**：已确认的新血缘更正证据优先于原审计，发布详情通过 `adopted_evidence`、
+  `evidence_diff` 明确展示本次采用哪一份证据、哪些表被替换；未确认证据只提示不生效。
+- **失败重试不得写成成功**：同一 `request_id` 已发布则直接返回幂等结果（`duplicate=true`，
+  `publish_count` 保持 1）；被阻断过的请求每次重试都要重新校验目录和同步数据。
+- **并发恢复只有一个版本落地**：恢复请求携带 `expected_revision`，在进程内锁里做
+  compare-and-set，两个同时到达的恢复请求只有一个能推进确认版本。
+- **同一份记录多入口读取**：`/api/governance/publishes/{request_id}`、`/api/governance/audits`、
+  `/api/lake_audit` 列表与详情都读取同一条发布确认；发布结果回写审计的
+  `治理发布状态 / 采用证据 / 发布同步表数 / 待重试表 / 发布次数 / 治理发布待办`。
+
+相关接口：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/chains/metadata-govern` | 治理批次发布（`request_id`、`batch_id` 可选） |
+| GET | `/api/governance/publishes?batch_id=G71` | 批次发布确认列表 |
+| GET | `/api/governance/publishes/{request_id}` | 发布详情 |
+| POST | `/api/governance/publishes/{request_id}/recover?expected_revision=N` | 恢复/重试 |
+| GET | `/api/governance/audits` | 审计列表（含同一份发布确认） |
+| GET | `/api/governance/batches/{batch_id}` | 批次详情：审计、血缘、证据、发布记录 |
+| POST | `/api/governance/evidence` | 登记血缘更正证据（`confirmed` 控制是否生效） |
+
+G71 演示数据在种子数据里：审计报告 `id=2`（已确认）、血缘 `id=4`，目录 `99999` 初始不存在。
+页面 `/governance` 可以复现“目录缺失 → 补登记 → 登记更正证据 → 恢复发布 → 再重试”的全过程，
+并看到已发布内容、异常项、下次仍需处理的表和发布次数。
+
 ## 约定
 
 - 全部模块共享`frontend/src/views/WorkbenchView.vue|tsx`和一套资源路由。

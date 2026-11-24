@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from app.services import service_for
+from app.services.governance_publish import governance_publish
 
 router = APIRouter(prefix="/api/chains", tags=["业务链路"])
 
@@ -204,8 +205,18 @@ def chain_lifecycle(snapshot_id: int, clean_id: int, retention_id: int) -> dict:
 # ------------------------------------------------------------------
 
 @router.post("/metadata-govern")
-def chain_metadata_govern(lineage_id: int, audit_id: int, catalog_id: int) -> dict:
-    """元数据治理链路：追踪血缘 → 运行审计 → 同步目录。"""
+def chain_metadata_govern(
+    lineage_id: int,
+    audit_id: int,
+    catalog_id: int,
+    request_id: str | None = None,
+    batch_id: str | None = None,
+) -> dict:
+    """元数据治理链路：追踪血缘 → 运行审计 → 校验目录 → 形成治理发布确认。
+
+    目录不存在或同步确认数据为空时必须阻断，不能返回成功；失败会保留审计证据，
+    并且同一 request_id 只真正发布一次。
+    """
     steps = []
 
     # Step 1: 追踪血缘
@@ -226,15 +237,49 @@ def chain_metadata_govern(lineage_id: int, audit_id: int, catalog_id: int) -> di
     if not r2["ok"]:
         return {"chain": "metadata-govern", "ok": False, "steps": steps, "error": r2.get("message")}
 
-    # Step 3: 同步目录
+    # Step 3: 校验目录同步确认，并形成治理发布确认
     svc_catalog = service_for("table_catalog")
     if not svc_catalog:
         raise HTTPException(404, "table_catalog 服务未注册")
-    r3 = svc_catalog.domain_sync_catalog(catalog_id)
-    steps.append({"step": "sync_catalog", "ok": r3["ok"], "details": r3})
+    catalog_entry = governance_publish.find_catalog(catalog_id)
+    r3 = svc_catalog.domain_sync_catalog(
+        int(catalog_entry["id"]) if catalog_entry is not None else catalog_id
+    )
+    publish = governance_publish.publish(
+        request_id=request_id,
+        batch_id=batch_id,
+        lineage_id=lineage_id,
+        audit_id=audit_id,
+        catalog_id=catalog_id,
+    )
+    steps.append({
+        "step": "sync_catalog",
+        "ok": bool(r3["ok"] and publish["ok"]),
+        "details": {
+            "sync": r3,
+            "publish_status": publish["status"],
+            "publish_id": publish["publish_id"],
+            "adopted_evidence": publish["adopted_evidence"],
+            "synced_tables": publish["synced_tables"],
+            "anomalies": publish["anomalies"],
+        },
+    })
 
-    return {"chain": "metadata-govern", "ok": True, "steps": steps, "summary": {
-        "lineage_depth": r1.get("depth"),
-        "audit_tables": r2.get("tables_checked"),
-        "synced_tables": r3.get("synced_tables"),
-    }}
+    ok = bool(publish["ok"] and r3["ok"])
+    response = {
+        "chain": "metadata-govern",
+        "ok": ok,
+        "steps": steps,
+        "publish": publish,
+        "summary": {
+            "lineage_depth": r1.get("depth"),
+            "audit_tables": r2.get("tables_checked"),
+            "synced_tables": publish["synced_tables"],
+            "published_tables": publish["published_tables"],
+            "retry_tables": publish["retry_tables"],
+            "adopted_evidence": publish["adopted_evidence"],
+        },
+    }
+    if not ok:
+        response["error"] = publish["message"]
+    return response

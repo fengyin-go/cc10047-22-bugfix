@@ -41,6 +41,7 @@
       <thead>
         <tr>
           <th v-for="column in meta.fields" :key="column">{{ column }}</th>
+          <th v-for="column in extraColumns" :key="column">{{ column }}</th>
           <th>当前状态</th>
           <th>可执行动作</th>
         </tr>
@@ -48,6 +49,7 @@
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)" :data-testid="`row-${row.id}`" :data-status="String(row.status)">
           <td v-for="column in meta.fields" :key="column">{{ row[column] ?? '—' }}</td>
+          <td v-for="column in extraColumns" :key="column">{{ extraValue(row, column) }}</td>
           <td>{{ row.status }}</td>
           <td class="row-actions">
             <button
@@ -63,13 +65,18 @@
           </td>
         </tr>
         <tr v-if="!rows.length">
-          <td :colspan="meta.fields.length + 2" class="empty-state">
+          <td :colspan="meta.fields.length + extraColumns.length + 2" class="empty-state">
             暂无{{ meta.name }}数据，可先登记{{ meta.entity }}
           </td>
         </tr>
       </tbody>
     </table>
 
+    <p v-if="isAuditModule" class="status-legend">
+      审计列表与
+      <RouterLink to="/governance">治理发布确认</RouterLink>
+      读取同一份发布记录；目录异常会阻断发布，失败重试不会写成成功。
+    </p>
     <div v-if="showCreate" class="modal-backdrop" data-testid="create-modal">
       <form class="modal" @submit.prevent="submitCreate">
         <h3>登记{{ meta.entity }}</h3>
@@ -95,6 +102,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 
 import {
   createEntry,
@@ -107,6 +115,26 @@ import type { EntryRow } from '@/data/types'
 
 const props = defineProps<{ moduleKey: string }>()
 const meta = moduleMeta(props.moduleKey)
+const isAuditModule = meta.key === 'lake_audit'
+const extraColumns = computed(() =>
+  isAuditModule
+    ? ['发布确认', '采用证据', '同步表数', '发布次数', '仍需处理表', '发布待办']
+    : [],
+)
+
+function extraValue(row: EntryRow, column: string): string {
+  const confirmation = row.publish_confirmation as
+    | { status?: string; adopted_evidence?: string; synced_tables?: number; publish_count?: number; next_tables_to_process?: string[]; audit_pending_items?: string[] }
+    | null
+    | undefined
+  if (column === '发布确认') return confirmation?.status ?? '—'
+  if (column === '采用证据') return confirmation?.adopted_evidence ?? '—'
+  if (column === '同步表数') return String(confirmation?.synced_tables ?? 0)
+  if (column === '发布次数') return String(confirmation?.publish_count ?? 0)
+  if (column === '仍需处理表') return (confirmation?.next_tables_to_process ?? []).join('、') || '—'
+  if (column === '发布待办') return (confirmation?.audit_pending_items ?? []).join('；') || '—'
+  return '—'
+}
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')

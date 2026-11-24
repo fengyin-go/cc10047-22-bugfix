@@ -18,6 +18,12 @@ class Store:
     def module_names(self) -> list[str]:
         return sorted(self._tables)
 
+    def reset(self) -> None:
+        """回到种子数据；测试和本地演示重跑时使用。"""
+        self._tables = {
+            name: [dict(row) for row in rows] for name, rows in SEED_ROWS.items()
+        }
+
     def rows(self, module: str) -> list[dict[str, Any]]:
         return self._tables.setdefault(module, [])
 

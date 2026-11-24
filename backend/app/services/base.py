@@ -38,10 +38,15 @@ class BaseModuleService:
             rows = [row for row in rows if row.get("status") == status]
         total = len(rows)
         start = (page - 1) * size
-        return rows[start:start + size], total
+        return [self.decorate_entry(row) for row in rows[start:start + size]], total
+
+    def decorate_entry(self, row: dict[str, Any]) -> dict[str, Any]:
+        """列表/详情统一出口；需要跨模块确认的模块在这里挂同一份记录。"""
+        return row
 
     def get_entry(self, entry_id: int) -> dict[str, Any] | None:
-        return store.find(self.MODULE, entry_id)
+        entry = store.find(self.MODULE, entry_id)
+        return self.decorate_entry(entry) if entry is not None else None
 
     def create_entry(self, values: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
         missing = [

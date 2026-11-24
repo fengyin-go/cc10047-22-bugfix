@@ -1,0 +1,4 @@
+# 测试依赖：FastAPI TestClient 需要 httpx2，测试运行用 pytest。
+-r requirements.txt
+pytest==9.2.0
+httpx2==2.16.2
